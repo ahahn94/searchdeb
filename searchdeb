@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+from os import mkdir
+
+from os.path import isdir, isfile
+
+import yaml
+import gzip
+from urllib.parse import urlsplit
+import urllib.request
+from packaging import version
+from pathlib import Path
+
+# Constants
+PROGRAM_DIR = str(Path.home()) + "/.searchdeb"
+REPOS_FILE = PROGRAM_DIR + "/repos.yaml"
+
+
+def main():
+    """
+    Main program.
+    """
+    init()
+    for repo in read_repos_file()["repos"]:
+        url = build_url_to_packages_gz(repo["repo"])
+        packages_raw = download_packages_list(url)
+        packages_list = parse_packages_file(packages_raw)
+        for package in repo["packages"]:
+            latest_package = get_latest_package(packages_list, package)
+            print_package_information(latest_package, repo["repo"])
+
+
+def init():
+    """
+    Initialize PROGRAM_DIR and REPOS_FILE.
+    """
+    if (not isdir(PROGRAM_DIR)):
+        mkdir(PROGRAM_DIR)
+    if (not isfile(REPOS_FILE)):
+        default_repos = {'repos': [{'repo': 'deb https://apt.enpass.io/ stable main', 'packages': ['enpass']},
+                                   {'repo': 'deb http://repository.spotify.com stable non-free',
+                                    'packages': ['spotify-client']}]}
+        file = open(REPOS_FILE, "w")
+        yaml.dump(default_repos, file)
+        file.close()
+
+
+def read_repos_file():
+    """
+    Load the repos from REPOS_FILE.
+    :return: repos from REPOS_FILE.
+    """
+    file = open(REPOS_FILE, "r")
+    repos = yaml.load(file)
+    return repos
+
+
+def build_url_to_packages_gz(repo_string):
+    """
+    Build the url to the web folder that contains the Packages.gz.
+    :param repo_string: Debian style repo string (like "deb http://foo.bar stable main").
+    :return: URL to the Packages.gz
+    """
+    parts = repo_string.split(" ")
+    url = "/".join([parts[1].strip("/"), "dists", parts[2], parts[3], "binary-amd64", "Packages.gz"])
+    return url
+
+
+def download_packages_list(packages_url):
+    """
+    Download the Packages.gz from the given url.
+    :param packages_url: URL to the Packages.gz.
+    :return: Content of the textfile inside the Packages.gz.
+    """
+    packages_gz = urllib.request.urlopen(packages_url)
+    packages_gz_content = gzip.open(packages_gz, "rt").read().strip()
+    return packages_gz_content
+
+
+def parse_packages_file(file_content):
+    """
+    Parse the content read from Packages.gz.
+    :param file_content: Content of Packages.gz.
+    :return: List of the package elements of Packages.gz.
+    """
+    blocks = str.split(file_content, "\n\n")
+    list = []
+    for block in blocks:
+        list.append(yaml.load(block))
+    return list
+
+
+def get_latest_package(packages_list, package_name):
+    """
+    Get the element from the list that has the highest
+    version number and a name that matches the package_name.
+    :param packages_list: List of the packages from Packages.gz.
+    :param package_name: Name of the package to search the newest version for.
+    :return: Element of the list with package_name and the highest version number.
+    """
+    latest_version = None
+    latest_package = None
+    for package in packages_list:
+        if (package["Package"] == package_name):
+            package_version = version.parse(package["Version"])
+            if (latest_version == None):
+                latest_version = package_version
+                latest_package = package
+            if (package_version > latest_version):
+                latest_version = package_version
+                latest_package = package
+    return latest_package
+
+
+def print_package_information(package, repo_string):
+    """
+    Print the package name, version and link to the .deb file to the CLI.
+    :param package: Package to print to the CLI.
+    :param repo_string: Debian style repo string (like "deb http://foo.bar stable main").
+    """
+    package_name = package["Package"]
+    package_version = package["Version"]
+    package_filename = package["Filename"]
+    repo_url = repo_string.split(" ")[1].strip("/")
+    package_binary_url = repo_url + "/" + package_filename
+    print(package_name + " - " + package_version + "\n" + package_binary_url + "\n")
+
+
+main()
